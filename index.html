@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>tl — Claude Code in traffic</title>
+<!-- Never expose a white/raw-HTML frame while assets load. Opening this file
+     directly redirects to the local server, where tailing and weather work. -->
+<style>
+  html, body { margin: 0; min-height: 100%; background: #050608; color: #f5f5f7; }
+  body:not(.ready) { visibility: hidden; }
+</style>
+<script>
+  if (location.protocol === "file:") location.replace("http://localhost:8765/");
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="ready">
+
+<canvas id="sky"></canvas>
+<canvas id="scene"></canvas>
+
+<!-- ── session / controls ─────────────────────────────────────────── -->
+<section class="panel glass" id="p-main" aria-label="session">
+  <div class="row title-row">
+    <h1>tl</h1>
+    <span class="tag" id="mode-tag">live</span>
+    <span class="spacer"></span>
+    <button class="icon-btn" id="btn-sound" title="ambient sound" aria-label="sound">
+      <svg viewBox="0 0 20 20"><path d="M4 8v4h3l4 3V5L7 8H4z" class="fill"/><path d="M13.5 7.5a4 4 0 0 1 0 5M15.5 5.5a7 7 0 0 1 0 9" class="stroke"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-kiosk" title="kiosk (F)" aria-label="fullscreen">
+      <svg viewBox="0 0 20 20"><path d="M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4" class="stroke"/></svg>
+    </button>
+    <button class="icon-btn" id="btn-gear" title="settings" aria-label="settings">
+      <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6" class="stroke"/><path d="M10 2.8v2.4M10 14.8v2.4M2.8 10h2.4M14.8 10h2.4M4.9 4.9l1.7 1.7M13.4 13.4l1.7 1.7M15.1 4.9l-1.7 1.7M6.6 13.4l-1.7 1.7" class="stroke"/></svg>
+    </button>
+  </div>
+  <div class="sub ellip" id="watching">watching —</div>
+  <div class="seg" id="mode-seg">
+    <button data-mode="live" class="on">Live</button>
+    <button data-mode="replay">Replay</button>
+    <button data-mode="demo">Demo</button>
+  </div>
+  <div class="row gap" id="speed-row" hidden>
+    <span class="caption">speed</span>
+    <div class="seg small" id="speed-seg">
+      <button data-speed="1" class="on">1×</button>
+      <button data-speed="4">4×</button>
+      <button data-speed="12">12×</button>
+      <button data-speed="40">40×</button>
+    </div>
+    <button class="icon-btn" id="btn-pause" title="pause">
+      <svg viewBox="0 0 20 20"><path d="M7 5v10M13 5v10" class="stroke"/></svg>
+    </button>
+  </div>
+  <div class="row gap" id="demo-row" hidden>
+    <button class="btn" id="demo-task">+ task</button>
+    <button class="btn warn" id="demo-fail">fail one</button>
+    <button class="btn" id="demo-hold">hold 5s</button>
+  </div>
+</section>
+
+<!-- ── outside right now ──────────────────────────────────────────── -->
+<section class="panel glass" id="p-now" aria-label="now">
+  <div class="clock" id="clock">--:--</div>
+  <div class="sub ellip" id="wx-line">set your zip for the real sky</div>
+  <div class="caption ellip" id="sun-line">—</div>
+  <hr>
+  <div class="tiles">
+    <div class="tile"><b id="st-through">0</b><span>through</span></div>
+    <div class="tile"><b id="st-crash">0</b><span>crashed</span></div>
+    <div class="tile"><b id="st-queue">0</b><span>queued</span></div>
+    <div class="tile"><b id="st-events">0</b><span>events</span></div>
+  </div>
+  <div class="caption" id="st-tokens">·</div>
+</section>
+
+<!-- ── what Claude is doing right now ─────────────────────────────── -->
+<section class="panel glass" id="p-status" aria-label="status">
+  <span class="dot yellow" id="status-dot"></span>
+  <div class="grow">
+    <b id="status-line">waking up…</b>
+    <div class="caption ellip" id="status-sub">—</div>
+  </div>
+</section>
+
+<!-- ── verbose activity feed ──────────────────────────────────────── -->
+<section class="panel glass" id="p-feed" aria-label="activity">
+  <header><span>Activity</span><button class="btn tiny ghost" id="feed-clear">clear</button></header>
+  <ol id="feed"></ol>
+</section>
+
+<!-- ── legend ─────────────────────────────────────────────────────── -->
+<section class="panel glass" id="p-legend" aria-label="legend">
+  <div class="row"><span class="dot red"></span><span>waiting — permission prompt / long tool</span></div>
+  <div class="row"><span class="dot yellow"></span><span>working — speed = progress</span></div>
+  <div class="row"><span class="dot green"></span><span>done — lane open for the next task</span></div>
+  <div class="row"><span class="dot gray"></span><span>queued — task backlog</span></div>
+  <div class="row"><span class="crashglyph"></span><span>crash — a tool call failed</span></div>
+  <div class="caption dim">F for kiosk · HUD fades while you just watch</div>
+</section>
+
+<!-- ── car (task) detail card ─────────────────────────────────────── -->
+<section class="panel glass" id="p-car" hidden>
+  <div class="row">
+    <b class="ellip" id="car-title">—</b>
+    <span class="spacer"></span>
+    <button class="icon-btn" id="car-close" aria-label="close">
+      <svg viewBox="0 0 20 20"><path d="M6 6l8 8M14 6l-8 8" class="stroke"/></svg>
+    </button>
+  </div>
+  <div class="caption" id="car-kind">—</div>
+  <div class="meter"><i id="car-prog"></i></div>
+  <div class="caption" id="car-stats">—</div>
+  <ol class="mini" id="car-tools"></ol>
+</section>
+
+<!-- ── settings popover ───────────────────────────────────────────── -->
+<div class="panel glass" id="gear-pop" hidden>
+  <label class="caption" for="zip-input">zip code — sky, sun &amp; weather</label>
+  <div class="row gap">
+    <input id="zip-input" placeholder="94107" maxlength="10" autocomplete="postal-code">
+    <button class="btn" id="zip-save">save</button>
+  </div>
+  <div class="caption dim" id="gear-note">until set, the sun is approximated from your timezone</div>
+</div>
+
+<script src="world.js"></script>
+<script src="session.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
